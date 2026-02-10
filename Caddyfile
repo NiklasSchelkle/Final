@@ -1,0 +1,19 @@
+http://schnoorki.knowladgebaseai.space {
+    # Hier ist basic_auth jetzt weg!
+    reverse_proxy open_webui:8080
+}
+
+http://schnoordatabase.knowladgebaseai.space {
+    basic_auth * {
+        Schnoor $2a$14$FoZVKR5kDUKEUJeLDsXYLu2TFDw5A/SvE9SAjLwmGP2gCf.Rkt/2u
+    }
+    reverse_proxy rag_pgadmin:80
+}
+
+http://schnoordateien.knowladgebaseai.space {
+    # Der Türsteher: docker exec -it caddy caddy hash-password --plaintext Glühwein
+    basic_auth * {
+        Schnoor $2a$14$FoZVKR5kDUKEUJeLDsXYLu2TFDw5A/SvE9SAjLwmGP2gCf.Rkt/2u
+    }
+    reverse_proxy rag_file_server:80
+}
