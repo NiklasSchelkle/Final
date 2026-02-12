@@ -1,17 +1,19 @@
 SCHNOOR Hybrid RAG System 🚀
 
-Dieses Repository enthält ein fortschrittliches Hybrid RAG (Retrieval-Augmented Generation) System, das Vektorsuche und Wissensgraphen kombiniert. Optimiert für den Betrieb auf NVIDIA GPU-Servern (z.B. L40S) unter Nutzung von Docker, Ollama und PostgreSQL.
+Dieses Repository enthält ein fortschrittliches Hybrid RAG (Retrieval-Augmented Generation) System, das Vektorsuche und Wissensgraphen kombiniert. Optimiert für den Betrieb auf NVIDIA GPU-Servern (z. B. L40S) unter Nutzung von Docker, Ollama und PostgreSQL.
 📋 Inhaltsverzeichnis
 
-    Voraussetzungen & Treiber
+    1. Voraussetzungen & Treiber
 
-    Installation NVIDIA Toolkit
+    2. Installation NVIDIA Toolkit
 
-    Setup & Start
+    3. Setup & Start
 
-    Modell-Konfiguration
+    4. Modell-Konfiguration
 
-    Daten-Ingestion
+    5. Daten-Ingestion
+
+    🔗 Zugriff
 
 1. Voraussetzungen & Treiber
 
@@ -40,10 +42,10 @@ sudo reboot
 Die Brücke zwischen Docker und der GPU.
 Bash
 
-# GPG-Key hinzufügen
+# GPG-Key für die Sicherheit hinzufügen
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
-# Repository-Liste anlegen
+# Repository-Liste korrekt anlegen
 curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
   sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
   sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
@@ -52,15 +54,16 @@ curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-contai
 sudo apt-get update
 sudo apt-get install -y nvidia-container-toolkit
 
-# Docker konfigurieren und neu starten
+# Docker für GPU-Nutzung konfigurieren
 sudo nvidia-container-toolkit runtime configure --runtime=docker
+
+# Docker neu starten, um Änderungen zu übernehmen
 sudo systemctl restart docker
 
-Funktionstest
-
-Überprüfe, ob Docker Zugriff auf die GPU hat:
+Funktionstest (Hardware -> Treiber -> Docker)
 Bash
 
+# Prüfen, ob der Container die Grafikkarte sieht
 docker run --rm --gpus all nvidia/cuda:12.0.1-base-ubuntu22.04 nvidia-smi
 
 3. Setup & Start
@@ -71,51 +74,49 @@ git clone https://github.com/NiklasSchelkle/Final.git
 cd Final
 
 Konfiguration
-
-Erstelle eine .env Datei und trage deine Tokens und Pfade ein:
 Bash
 
-nano .env
+# In der .env Datei Tokens und Pfade eintragen
+nano .env 
 
 System starten
 Bash
 
-# Images bauen und Container im Hintergrund starten
+# Starten der Skripte und Images
 docker compose up -d
 
-# Status der Container prüfen
+# Status prüfen
 docker ps -a
 
 4. Modell-Konfiguration
 
-Lade die benötigten Modelle in den Ollama-Container.
+Lade das LLM und das Embedding-Modell in den Ollama-Container.
 Bash
 
-# Embedding Model (mxbai-embed-large)
-docker exec -it ollama ollama pull mxbai-embed-large
+# Embedding Model (auf Dimensionen in VektorErweiterung.sql achten)
+docker exec -it ollama ollama pull mxbai-embed-large 
 
-# LLM (Mistral-Nemo)
+# LLM
 docker exec -it ollama ollama pull mistral-nemo
 
 5. Daten-Ingestion
 
-Um Dokumente (PDFs, Docs, etc.) in das System einzuspielen:
-Dokumente übertragen
-
-Erstelle den Zielordner und lade deine Dateien von deinem lokalen Rechner hoch:
+Dokumente übertragen und in die Hybrid-Datenbank einlesen.
+Ordner auf dem Server erstellen
 Bash
 
-# Auf dem Server:
 mkdir -p ~/Final/files_to_embed
 
-# Auf deinem Laptop (Beispiel Pfad):
+Dokumente hochladen (vom lokalen PC)
+PowerShell
+
+# Befehl für Windows PowerShell
 scp -r "C:\Users\Dell\SchnoorfinalRAG\files_to_embed\*" root@86.38.238.152:~/Final/files_to_embed/
 
 Einlesen & Embedden
-
-Starte das Ingestion-Skript, um Vektoren und Graph-Tripel zu erzeugen:
 Bash
 
+# Startet das Ingestion-Skript im Backend-Container
 docker exec -it rag_backend python ingestion.py
 
 🔗 Zugriff
