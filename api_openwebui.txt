@@ -1,0 +1,24 @@
+import requests
+from pydantic import BaseModel
+from typing import Union, Generator
+
+
+class Pipe:
+    def __init__(self):
+        self.type = "pipe"
+        self.id = "schnoor_hybrid_rag"
+        self.name = "SCHNOOR Hybrid RAG"
+
+    def pipe(self, body: dict, __user__: dict = None) -> Union[str, Generator]:
+        user_message = body["messages"]
+
+        try:
+            # Verbindung zum Docker-Backend
+            response = requests.post(
+                "http://rag_backend:8050/query",
+                json={"question": user_message},
+                timeout=120,
+            )
+            return response.json()["answer"]
+        except Exception as e:
+            return f"Fehler: {str(e)}"
