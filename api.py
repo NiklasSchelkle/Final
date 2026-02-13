@@ -30,7 +30,7 @@ async def handle_query(query: ChatQuery):
             history_context += f"{msg['role']}: {msg['content']}\n"
         
         rewrite_prompt = f"""
-        Erstelle basierend auf dem Chat-Verlauf eine präzise, eigenständige Suchanfrage für eine Datenbank.
+        Erstelle basierend auf dem Chat-Verlauf eine präzise, eigenständige Suchanfrage.
         Ersetze Pronomen (er, sie, es, dort) durch die tatsächlichen Subjekte aus dem Verlauf.
         
         VERLAUF:
@@ -54,23 +54,27 @@ async def handle_query(query: ChatQuery):
     
     # 4. SYSTEM PROMPT (Deine bewährten Anweisungen)
     system_prompt = f"""
-    Du bist ein professioneller KI-Assistent für das Unternehmen SCHNOOR. 
-    Deine Aufgabe ist es, eine präzise, zusammenhängende Antwort basierend auf internen Fakten zu liefern. Deine Aufgabe ist also die VOLLSTÄNDIGE Wiedergabe von Fakten.
+    ### DEINE ROLLE ###
+    Du bist der offizielle SCHNOOR Wissensexperte. Antworte basierend auf den bereitgestellten Daten.
+    Dein Ziel: Maximale Vollständigkeit und Korrektheit.
 
     ### DATENGRUNDLAGE ###
-    WISSENSGRAPH (Strukturierte Fakten): {graph}
-    TEXT-KONTEXT (Ausführliche Belege): {context}
+    1. WISSENSGRAPH (Strukturierte Fakten):
+    {graph}
 
-    ### DEINE ANWEISUNGEN ###
-    1. Nutze den Chatverlauf um den Context zu verstehen.
-    2. Antworte direkt und strukturiert. Erstelle EINE einzige, vollständige Liste oder Zusammenfassung.
-    3. Nutze den WISSENSGRAPH als Master-Liste für die Vollständigkeit.Alles was dort steht, muss in die Antwort.
-    4. Nutze den TEXT-KONTEXT für Details. Fehlt der Text zu einem Graph-Eintrag, nenne ihn trotzdem kurz.
-    5. Wenn Info fehlt: "Dazu habe ich keine internen Dokumente, aber allgemein bekannt ist...".
-    
+    2. TEXT-KONTEXT (Detaillierte Belege):
+    {context}
+
+    ### ARBEITSANWEISUNG ###
+    - Schritt 1: Nutze den WISSENSGRAPH als Master-Liste. Jedes Faktum dort MUSS in die Antwort.
+    - Schritt 2: Ergänze Details aus dem TEXT-KONTEXT.
+    - Schritt 3: Wenn Informationen fehlen, antworte: "Dazu liegen keine internen Dokumente vor."
+    - Schritt 4: Verlinke am Ende JEDE genannte Quelle aus dem TEXT-KONTEXT.
+
     ### FORMATIERUNG ###
-    - Keine Meta-Diskussionen.
-    - Quellen am Ende übersichtlich auflisten: [Titel](URL).
+    - Nutze Markdown-Listen für Übersichtlichkeit.
+    - Keine Sätze wie "Laut Dokument...". Antworte direkt.
+    - ABSCHNITT QUELLEN: Liste alle verwendeten Quellen am Ende exakt so auf: [Titel](URL)
     """
     
     # 5. CHAT-HISTORIE FÜR DAS LLM AUFBEREITEN
@@ -84,7 +88,20 @@ async def handle_query(query: ChatQuery):
 
     # Die aktuelle Frage hinzufügen
     llm_messages.append(("user", last_user_message))
+
+    # --- NEU: DEBUG LOGGING FÜR DEN FINALEN PROMPT ---
+    print("\n" + "!"*60)
+    print("🚀 FINALER PROMPT AN OLLAMA (MISTRAL-NEMO)")
+    print("!"*60)
     
+    for msg_type, content in llm_messages:
+        print(f"\n--- ROLE: {msg_type.upper()} ---")
+        print(content)
+    
+    print("\n" + "!"*60)
+    print("ENDE DES PROMPTS - WARTE AUF GENERIERUNG...")
+    print("!"*60 + "\n")
+
     # 6. ANTWORT GENERIEREN
     response = llm.invoke(llm_messages)
     
