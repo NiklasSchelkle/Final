@@ -60,23 +60,60 @@ def search_hybrid_graph(question):
     conn = get_connection()
     cur = conn.cursor()
 
-    # STUFE 1: Vektor-Suche
+# STUFE 1: Hybrid-Suche (Vektor + Keyword Boost)
+    # 60 relevantesten Chunks
     cur.execute("""
-        SELECT p.full_text, p.title, p.source_url, p.id, c.content, p.created_at
-        FROM document_chunks c
-        JOIN parent_documents p ON c.parent_id = p.id
-        ORDER BY (c.embedding <=> %s::vector) ASC, p.created_at DESC
-        LIMIT 20;
-    """, (query_vector,))
-    rows = cur.fetchall()
+        WITH vector_search AS (
+            SELECT 
+                p.full_text as parent_text, 
+                p.title, 
+                p.source_url, 
+                p.id as p_id, 
+                c.content, 
+                (1 - (c.embedding <=> %s::vector)) as similarity
+            FROM document_chunks c
+            JOIN parent_documents p ON c.parent_id = p.id
+            ORDER BY c.embedding <=> %s::vector
+            LIMIT 60 
+        ),
+        keyword_search AS (
+            SELECT 
+                p.full_text as parent_text, 
+                p.title, 
+                p.source_url, 
+                p.id as p_id, 
+                c.content,
+                1.0 as similarity 
+            FROM document_chunks c
+            JOIN parent_documents p ON c.parent_id = p.id
+            WHERE c.content ILIKE %s 
+               OR p.full_text ILIKE %s
+            LIMIT 20
+        )
+        SELECT * FROM vector_search
+        UNION ALL
+        SELECT * FROM keyword_search
+    """, (query_vector, query_vector, f"%{question[:30]}%", f"%{question[:30]}%"))
     
-    if not rows:
-        cur.close()
-        conn.close()
-        return "", "Keine Daten gefunden."
+    rows = cur.fetchall()
+
+    # --- HIER BAUST DU DEIN SNIPPET EIN ---
+    passages = []
+    for r in rows:
+        # Wir bauen das Objekt so, dass der Reranker den Text (Index 4) sieht
+        # und die Metadaten für die Quellenangabe erhalten bleiben
+        passages.append({
+            "id": str(len(passages)),
+            "text": r[4], # c.content
+            "meta": {
+                "title": r[1],      # p.title
+                "url": r[2],        # p.source_url
+                "p_id": str(r[3]),  # p.id
+                "parent_text": r[0] # p.full_text
+            }
+        })
 
     # STUFE 2: Re-Ranking
-    passages = [{"id": i, "text": r[4], "meta": {"title": r[1], "url": r[2], "parent_text": r[0], "p_id": r[3]}} for i, r in enumerate(rows)]
     rerank_results = ranker.rerank(RerankRequest(query=question, passages=passages))
     top_results = rerank_results[:6]
 
