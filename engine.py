@@ -11,11 +11,11 @@ load_dotenv()
 
 def load_models():
     # Cache-Dir für Docker optimiert
-    ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir="/app/models/flashrank")
+    ranker = Ranker(model_name="ms-marco-MultiBERT-L-12", cache_dir="/app/models/flashrank")
     
     # LLM: OLLAMA 
-    llm = ChatOllama(model="mistral-nemo", base_url="http://ollama:11434", temperature=0.1,num_ctx=8192)
-    extraction_llm = ChatOllama(model="mistral-nemo", base_url="http://ollama:11434", temperature=0,num_ctx=8192)
+    llm = ChatOllama(model="qwen2.5:32b", base_url="http://ollama:11434", temperature=0.1,num_ctx=32768)
+    extraction_llm = ChatOllama(model="qwen2.5:32b", base_url="http://ollama:11434", temperature=0,num_ctx=8192)
     
     # LLM: OPENAI 
     #llm = ChatOpenAI(model="gpt-4o", temperature=0.1)
@@ -62,11 +62,11 @@ def search_hybrid_graph(question):
 
     # STUFE 1: Vektor-Suche
     cur.execute("""
-        SELECT p.full_text, p.title, p.source_url, p.id, c.content
+        SELECT p.full_text, p.title, p.source_url, p.id, c.content, p.created_at
         FROM document_chunks c
         JOIN parent_documents p ON c.parent_id = p.id
-        ORDER BY c.embedding <=> %s::vector
-        LIMIT 35;
+        ORDER BY (c.embedding <=> %s::vector) ASC, p.created_at DESC
+        LIMIT 20;
     """, (query_vector,))
     rows = cur.fetchall()
     
@@ -78,7 +78,7 @@ def search_hybrid_graph(question):
     # STUFE 2: Re-Ranking
     passages = [{"id": i, "text": r[4], "meta": {"title": r[1], "url": r[2], "parent_text": r[0], "p_id": r[3]}} for i, r in enumerate(rows)]
     rerank_results = ranker.rerank(RerankRequest(query=question, passages=passages))
-    top_results = rerank_results[:15]
+    top_results = rerank_results[:6]
 
     context_text = ""
     doc_ids = []
@@ -100,10 +100,13 @@ def search_hybrid_graph(question):
     FROM document_edges e
     JOIN document_nodes n1 ON e.source_node_id = n1.id
     JOIN document_nodes n2 ON e.target_node_id = n2.id
-    WHERE e.source_doc_id = ANY(%s::uuid[]) 
-    OR n1.entity_name ILIKE ANY(%s) 
-    OR n2.entity_name ILIKE ANY(%s)
-    LIMIT 65; 
+    WHERE (
+        e.source_doc_id = ANY(%s::uuid[]) 
+        OR n1.entity_name ILIKE ANY(%s) 
+        OR n2.entity_name ILIKE ANY(%s)
+    )
+    AND e.confidence >= 4  -- Nur hochwertige Fakten!
+    LIMIT 20; -- Reduziert von 65 auf 20
     """
     cur.execute(graph_query, (doc_ids, sql_terms, sql_terms))
     triples = cur.fetchall()
