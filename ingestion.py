@@ -38,7 +38,7 @@ def get_connection():
 # OLLAMA LOKAL 
 embeddings_model = OllamaEmbeddings(model="mxbai-embed-large", base_url="http://ollama:11434") # "ollama" ist der Name des Containers im Netzwerk
 
-llm = ChatOllama(model="mistral-nemo",base_url="http://ollama:11434", temperature=0,num_ctx=12288)
+llm = ChatOllama(model="qwen2.5:32b",base_url="http://ollama:11434", temperature=0,num_ctx=16384)
 
 # Hilfsfunktion für globale Konsistenz (Gedächtnis für Entitäts-Typen)
 def get_existing_types(cur):
@@ -50,33 +50,27 @@ def get_existing_types(cur):
 
 # 2. UNIVERSAL GRAPH EXTRACTION
 def extract_graph_triples(text, existing_types=[]):
-    """
-    Extrahiert Wissen ohne Themen-Einschränkung. 
-    Lernt Typen dynamisch und achtet auf Konsistenz.
-    """
     type_hint = f"Bisher bekannte Typen: {', '.join(existing_types)}" if existing_types else ""
     
     prompt = f"""
-    Extrahiere alle signifikanten Informationen aus dem Text als Wissens-Tripel (Subjekt | Beziehung | Objekt).
-    Weise jeder Entität (Subjekt und Objekt) einen Typ zu.
+    Extrahiere nur signifikante Informationen als Wissens-Tripel (Subjekt | Beziehung | Objekt).
 
-    DEINE AUFGABE lautet:
-    1. Identifiziere Entitäten (Personen, Organisationen, Werte, Fachbegriffe, Daten, Noten, alles Relevante).
-    2. Erfinde passende, präzise Typ-Bezeichnungen für diese Entitäten auf Basis ihres Kontextes.
-    3. **KONSISTENZ-REGEL**: Wenn du für eine Information bereits einen passenden Typ erstellt hast oder kennst, verwende diesen exakt so wieder. Erzeuge keine Synonyme.
-    4. Zerlege komplexe Sätze in mehrere einfache Tripel.
-    5. Tipps: Achte besonders auf tabellarische Strukturen (z.B. Zeugnisse, Listen) und extrahiere diese als klare Subjekt-Objekt-Paare.
+    ### QUALITÄTS-REGELN ###
+    1. KEINE PRONOMEN: Nutze niemals "er", "sie", "es" oder "dieser" als Subjekt. Ersetze sie durch den Namen der Entität.
+    2. ATOMARE FAKTEN: Ein Tripel muss ohne den restlichen Text Sinn ergeben. (Schlecht: "Er | hat | 5" -> Gut: "Projekt X | Risikostufe | 5").
+    3. RELEVANZ-FILTER: Ignoriere Füllwörter oder triviale Sätze. Extrahiere nur harte Fakten wie z.B., technische Daten, Personen, Projektnamen oder Projektstatus.
+    4. KONSISTENZ: Nutze für  Dinge gleiche Dinge immer exakt den gleichen Namen. 
+    5. BEWERTUNG: Weise jedem Tripel einen Confidence-Score zwischen 1 und 5 zu (5 = absolut sicher aus dem Text belegbar, 1 = vage Vermutung).
 
     {type_hint}
 
     Antworte NUR im JSON-Format:
     {{"triples": [
-        {{"s": "Niklas", "s_type": "PERSON", "p": "beherrscht", "o": "Python", "o_type": "SKILL"}},
-        {{"s": "Deutsch", "s_type": "FACH", "p": "bewertet mit", "o": "12 Punkte", "o_type": "NOTE"}}
+        {{"s": "Entität", "s_type": "TYP", "p": "Beziehung", "o": "Wert/Objekt", "o_type": "TYP", "confidence": 5}}
     ]}}
     
     Text: {text}
-    """
+    """ 
     try:
         response = llm.invoke(prompt)
         clean_content = response.content.replace("```json", "").replace("```", "").strip()
@@ -87,34 +81,61 @@ def extract_graph_triples(text, existing_types=[]):
         return []
 
 def save_to_graph(cur, triples, doc_id):
-    """Speichert Knoten mit Typ-Kategorisierung in den Graphen."""
+    """Speichert nur qualitativ hochwertige Knoten und Kanten in den Graphen."""
     for t in triples:
+        # 1. PRÜFUNG: Vollständigkeit und Confidence
+        # Wir erwarten jetzt auch ein Feld 'confidence' vom LLM
         if not all(k in t for k in ['s', 'p', 'o']):
             continue
+        
+        # Filter: Nur Fakten mit hoher Sicherheit (falls vom LLM geliefert, sonst Default 5)
+        if int(t.get('confidence', 5)) < 4:
+            continue
+
+        # 2. QUALITÄTS-FILTER: Längenbeschränkung
+        # Verhindert, dass ganze Sätze als "Entität" im Graphen landen
+        s_val = str(t['s']).strip()
+        p_val = str(t['p']).strip()
+        o_val = str(t['o']).strip()
+
+        if len(s_val) > 60 or len(o_val) > 100 or len(p_val) > 50:
+            # Zu lange Texte sind meistens kein sauberer Wissens-Fakt
+            continue
             
+        if len(s_val) < 2 or len(o_val) < 2:
+            # Zu kurze Fragmente (z.B. "X", "5") ohne Kontext ignorieren
+            continue
+
+        # 3. NORMALISIERUNG
+        # Wir vereinheitlichen die Beziehung (Kleinschreibung), um Duplikate zu vermeiden
+        relation = p_val.lower()
+        
         entities = [
-            (t['s'], t.get('s_type', 'UNKNOWN')), 
-            (t['o'], t.get('o_type', 'UNKNOWN'))
+            (s_val, t.get('s_type', 'UNKNOWN').upper()), 
+            (o_val, t.get('o_type', 'UNKNOWN').upper())
         ]
         
         node_ids = []
         for name, e_type in entities:
-            clean_name = str(name).strip()
-            # Eindeutige ID über Name generieren (Namespace UUID5)
+            # Eindeutige ID über kleingeschriebenen Namen generieren 
+            clean_name = name.strip()
             e_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, clean_name.lower()))
             node_ids.append(e_id)
             
             cur.execute("""
                 INSERT INTO document_nodes (id, entity_name, entity_type) 
                 VALUES (%s, %s, %s) 
-                ON CONFLICT (id) DO UPDATE SET entity_type = EXCLUDED.entity_type
+                ON CONFLICT (id) DO UPDATE SET 
+                    entity_type = EXCLUDED.entity_type 
+                WHERE EXCLUDED.entity_type != 'UNKNOWN'
             """, (e_id, clean_name, e_type))
         
+        # 4. KANTE SPEICHERN
         cur.execute("""
-            INSERT INTO document_edges (id, source_node_id, target_node_id, relation_type, source_doc_id)
-            VALUES (%s, %s, %s, %s, %s) 
+            INSERT INTO document_edges (id, source_node_id, target_node_id, relation_type, source_doc_id, confidence)
+            VALUES (%s, %s, %s, %s, %s, %s) 
             ON CONFLICT DO NOTHING
-        """, (str(uuid.uuid4()), node_ids[0], node_ids[1], t['p'], doc_id))
+        """, (str(uuid.uuid4()), node_ids[0], node_ids[1], relation, doc_id, int(t.get('confidence', 5))))
 
 # 3. VERARBEITUNGSLOGIK
 def ingest_document(file_path):
@@ -132,8 +153,8 @@ def ingest_document(file_path):
         
         # B. Chunking
         # Große Chunks (Parent) für Kontext, kleine (Child) für präzise Vektorsuche
-        parent_splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=400)
-        child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
+        parent_splitter = RecursiveCharacterTextSplitter(chunk_size=1750, chunk_overlap=250)
+        child_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
         
         conn = get_connection()
         cur = conn.cursor()
