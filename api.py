@@ -12,7 +12,6 @@ class ChatQuery(BaseModel):
 @app.post("/query")
 async def handle_query(query: ChatQuery):
     # 1. DATEN SORTIEREN
-    # Wir extrahieren die letzte Nachricht und den Verlauf
     if isinstance(query.question, list):
         messages = query.question
         last_user_message = messages[-1]["content"] if messages else ""
@@ -20,11 +19,9 @@ async def handle_query(query: ChatQuery):
         messages = []
         last_user_message = query.question
 
-    # 2. QUERY REWRITING (Das "Such-Gedächtnis")
-    # Wir erstellen eine Suchanfrage, die Pronomen durch echte Namen ersetzt
+    # 2. QUERY REWRITING
     search_query = last_user_message
     if len(messages) > 1:
-        # Wir fassen die letzten 3 Nachrichten zusammen, um Kontext zu gewinnen
         history_context = ""
         for msg in messages[-3:-1]:
             history_context += f"{msg['role']}: {msg['content']}\n"
@@ -42,23 +39,32 @@ async def handle_query(query: ChatQuery):
         Antworte NUR mit der umformulierten Suchanfrage (keine Einleitung).
         """
         try:
-            # Wir nutzen das LLM, um die Frage für die Vektorsuche zu optimieren
             rewrite_res = llm.invoke([("user", rewrite_prompt)])
             search_query = rewrite_res.content.strip()
         except Exception as e:
             print(f"Fehler beim Query Rewriting: {e}")
             search_query = last_user_message
 
-    # 3. HYBRID SUCHE (mit der optimierten Suchanfrage)
-    context, graph = search_hybrid_graph(search_query)
-    
-    # 4. SYSTEM PROMPT (Deine bewährten Anweisungen)
+    # 3. HYBRID SUCHE (Mit Begrüßungs-Check)
+    common_greetings = ["hi", "hallo", "hey", "moin", "servus", "guten tag"]
+    if last_user_message.lower().strip() in common_greetings:
+       context, graph = "Kein Kontext (Begrüßung)", "Keine Tripel (Begrüßung)"
+    else:
+       # Nur wenn es keine einfache Begrüßung ist, suchen wir in den Dokumenten
+       context, graph = search_hybrid_graph(search_query)
+
+    # 4. SYSTEM PROMPT
     system_prompt = f"""
     ### DEINE ROLLE ###
     Du bist der offizielle SCHNOOR Wissensexperte. Antworte basierend auf den bereitgestellten Daten.
     Dein Ziel: Maximale Vollständigkeit und Korrektheit.
 
-    ### DATENGRUNDLAGE ###
+    ### DEIN VERHALTEN ###
+    1. BEGRÜẞUNG & SMALLTALK: Wenn der Nutzer dich grüßt oder allgemeine Fragen stellt (z.B. "Wie geht es dir?", "Wer bist du?"), antworte charmant und hilfsbereit mit deinem eigenen Wissen.
+    2. FACHFRAGEN: Sobald eine Frage zu SCHNOOR, Projekten oder Fachthemen gestellt wird, priorisiere die DATENGRUNDLAGE.
+    3. DATENTREUE: Fakten aus dem WISSENSGRAPH und TEXT-KONTEXT haben bei Fachfragen absolute Priorität.
+
+    ### DATENGRUNDLAGE (Nur für Fachfragen) ###
     1. WISSENSGRAPH (Strukturierte Fakten):
     {graph}
 
@@ -66,10 +72,12 @@ async def handle_query(query: ChatQuery):
     {context}
 
     ### ARBEITSANWEISUNG ###
-    - Schritt 1: Nutze den WISSENSGRAPH als Master-Liste. Jedes Faktum dort MUSS in die Antwort.
-    - Schritt 2: Ergänze Details aus dem TEXT-KONTEXT.
-    - Schritt 3: Wenn Informationen fehlen, antworte: "Dazu liegen keine internen Dokumente vor."
-    - Schritt 4: Verlinke am Ende JEDE genannte Quelle aus dem TEXT-KONTEXT.
+    - Schritt 1: Entscheide, ob die Frage eine Begrüßung oder allgemeine Frage ist. Wenn ja, antworte direkt. Wenn Nein, nutze die Datengrundlage! 
+    - Schritt 2: Nutze den WISSENSGRAPH als Master-Liste. Jedes Faktum dort MUSS in die Antwort.
+    - Schritt 3: Ergänze Details aus dem TEXT-KONTEXT.
+    - Schritt 4: Wenn Informationen fehlen, antworte: "Dazu liegen keine internen Dokumente vor."
+    - Schritt 5: Verlinke am Ende JEDE genannte Quelle aus dem TEXT-KONTEXT.
+    - Schritt 6: Falls KEINE internen Daten zu einer fachlichen Frage vorliegen: Antworte "Dazu liegen keine internen Dokumente vor, aber allgemein bekannt ist...",
 
     ### FORMATIERUNG ###
     - Nutze Markdown-Listen für Übersichtlichkeit.
@@ -81,17 +89,15 @@ async def handle_query(query: ChatQuery):
     llm_messages = [("system", system_prompt)]
     
     if isinstance(messages, list):
-        # Alle Nachrichten außer der letzten (die kommt als 'user' prompt)
         for msg in messages[:-1]:
             role = "user" if msg.get("role") == "user" else "assistant"
             llm_messages.append((role, msg.get("content", "")))
 
-    # Die aktuelle Frage hinzufügen
     llm_messages.append(("user", last_user_message))
 
-    # --- NEU: DEBUG LOGGING FÜR DEN FINALEN PROMPT ---
+    # --- DEBUG LOGGING ---
     print("\n" + "!"*60)
-    print("🚀 FINALER PROMPT AN OLLAMA (MISTRAL-NEMO)")
+    print("🚀 FINALER PROMPT AN OLLAMA (QWEN-32B)")
     print("!"*60)
     
     for msg_type, content in llm_messages:
